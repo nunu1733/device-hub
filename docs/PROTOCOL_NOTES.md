@@ -1104,3 +1104,92 @@ get/set は cmd が +0x80/同一値の関係。`devID` はプロファイル番�
 - 公式の日本語表示名: 移動同期 / 直線補正 / リップル / LOD / ガラスモード / 20K FPS / 競技モード / 角度調整 /
   スリープ時間 / スクロールBhop / ホイール応答時間 / デバウンスタイム / 高速トリガー / ドングルLED (信号) /
   プロファイルをリセット / 完全初期化。X-Y軸分離は DPI タブの X/Y 切り替えで扱う (設定行には出さない)。
+
+---
+
+## 6. Logicool G903 HERO (Lightspeed レシーバー 046D:C53A 経由) — 実機検証済み (2026-11)
+
+G Hub の置き換え用。HID++ 2.0 の標準 feature + G903 固有の挙動。ドライバは `devhub-hid/src/logitech.rs`。
+
+### 6.1 トランスポート
+
+- **設定チャネル**: レシーバー if2 の 2 コレクション。`FF00:0001` = short (report 0x10, 7B)、
+  `FF00:0002` = long (report 0x11, 20B)。**書き込みは short コレクションに report 0x10 / long コレクションに
+  report 0x11** (別コレクションの report ID は WriteFile が拒否される)。hidapi はバッファ長を
+  OutputReportByteLength に合わせて切り詰めるため、短い timeout の連続 read と併用すると応答を取りこぼす。
+  → **常駐リーダースレッド + チャネル**方式で受ける (ドライバ・`examples/logi.rs` とも)。
+- **2.0 feature 呼び出しは long フレームで送る** (Solaar と同じ)。func バイト = `func<<4 | swid`。
+  swid は 1 でも 9 でも 13 (G Hub は常に 13) でも応答は変わらない。
+- **応答は feature / funcswid をエコー**し、レポート種別 (short/long) は要求と異なることがある
+  (Root.GetFeature への short 要求にも long 応答が返る)。
+- **エラー応答**は `[rid, dev, 0x8F, SubID(feature) エコー, Address(funcswid) エコー, code, 0]`。
+  code は HID++ 1.0 の ErrorCode (Solaar `hidpp10_constants.ErrorCode` と同じ):
+  0x01=INVALID_SUB_ID_COMMAND (レシーバー自身への 2.0 呼び出し)、0x08=UNKNOWN_DEVICE (未ペア index)、
+  **0x09=RESOURCE_ERROR (ペア済みだがリンク到達不可 = スリープ)**。
+- **Windows HID の入力レポートはブロードキャストではなく消費** — 待ち読みした 1 プロセスが受け取る。
+  G Hub が動いていると応答を持っていかれるので、診断は G Hub 停止中に (常駐アプリとの共存は
+  双方が読むため取り合いになる。G Hub 側は「何も起きない」動作に見える)。
+- **ペア機の特定**: index 1..6 に `Root.Ping` (func 1, payload `[0,0,任意]` → `[major, minor, echo]`)。
+  G903 は **proto 4.2** を返す。スリープ中は上記 0x09、未ペアは 0x08。起動直後の最初の ping は
+  消えることがあるのでリトライする。
+- **Root.GetFeature の feature ID はビッグエンディアン** (`[idHi, idLo]`)。応答 `[index, flags, version]`。
+  なお FeatureSet (0x0001) による全列挙の方が確実。
+
+### 6.2 G903 HERO の feature 一覧 (実機列挙、30 個)
+
+```
+0x0001 FeatureSet / 0x0003 DeviceName / 0x0005 FriendlyName / 0x1d4b (不明) / 0x0020 DFU
+0x1001 BatteryLevelStatus / 0x8071 RgbEffects / 0x8100 OnboardProfiles / 0x8110 ProfileRecording
+0x8060 MultiPlatform / 0x2201 AdjustableDPI / 0x00c2
+0x1801 0x1802 0x1803 0x1805 0x1806 0x1811 0x1830 0x1890 0x1891 0x18a1 0x18b1 0x18c0 0x1863 (G Hub ベンダー系)
+0x1df3 0x1e00 0x1eb0 0x1e22 0x2121
+```
+
+- **0x8061/0x8062 (Report Rate) は非搭載** — ポーリングレートはオンボードプロファイル内の属性で、
+  ホストからは変えられない。0x1004/0x1000 も非搭載で電池は 0x1001 のみ。
+- 0x18xx 群は G Hub 専用ベンダー feature (G Shift / キー設定など)。0x1d4b は解析未着手。
+
+### 6.3 実測された値の読み書き
+
+- **AdjustableDPI (0x2201)**: GetDpiList = func 1 (`0x10`)、GetDpi = func 2 (`0x20`)、SetDpi = func 3 (`0x30`)。
+  ペイロードはエコー 1B に続く。
+  - GetDpiList: `[0x00, dir, page]` → `[エコー, 値...]` 値は u16BE 列、0x0000 終端。圧縮エントリ
+    (上位 3bit = 0b111) は「step = 下位 13bit、次の u16 = 終端」で範囲埋め。実測 =
+    `[00 | 0064 | E032 6400]` → **100, 150, 200, … 25600 (50 刻み)**。
+  - GetDpi: `[0,0,0]` → `[00 | 現在 u16BE | 既定 u16BE]`。実測 `[00 0640 0320]` = 現在 1600 / 既定 800。
+  - SetDpi: `[0x00, dpiHi, dpiLo]`。実機で 800 → 読み戻し 800 → 1600 → 1600 を確認 (即時適用)。
+  - 注意: func バイトの組み立てを `0x10 | swid | func<<4` のような OR で書くと
+    func 2 (0x20) が 0x3D (func 3) になる — **必ず `func<<4 | swid` で作る** (本プローブのバグの原因)。
+- **BatteryLevelStatus (0x1001)**: func 0 → `[level, next, state]`。実測 `[0f ea 00]`。
+  level を % と解釈 (G Hub のスニッフィング時点で 15%)。state の充電ビットは要追加検証。
+- **FriendlyName (0x0005)**: func 0/1 とも「param = 文字オフセット、payload[0..16] = 16 文字チャンク」。
+  実測 "G903 LIGHTSPEED Wireless Gaming Mouse w/ HERO"。0x0003 DeviceName は "BL1" のような
+  FW モジュール風データを返すので名前には使わない。
+- **OnboardProfiles (0x8100)**: func 4 = プロファイル→セクタ対応表 `[?, 01, 01, ff, 00, 02, 00, ff, …]`、
+  func 5 = プロファイルデータ読み (page 単位)。page 1 に DPI ステージが **u16LE 列**で入る
+  (実測 400 / 800 / 1600 / 3200 / 6400 = G Hub の表示と一致)。func 2 の応答 0x01 = オンボードモード ON
+  (settings.db の `onboardMode.enabled: true` と一致)。
+  書き込み (プロファイル編集) は未解析 — ボタン割当・ステージ色・RGB はここ経由になる (§6.5)。
+- **ProfileRecording (0x8110)**: func 0 → 0x0c、func 3 → セクタ割当 `[01 02 … 0c]`。
+- **RgbEffects (0x8071)**: func 0 = ゾーン情報 `[zone エコー, …]`、func 7 = `[00,00,00,00, 3c, 01, 2c, …]`
+  (3c=60 は輝度?)。G Hub のゾーン設定は書き込みを含むため未解析。
+- **ファーム**: 0x0002 (DeviceFwVersion) 非搭載。スニッフィングでは feature idx 2 の応答に
+  "BL1 06.01.B0013" / "MPM#" 風のデータが見えたが解析未着手。`DeviceInfo.firmware` は None のまま。
+
+### 6.4 G Hub の通信パターン (スニッフィング 2026-11-19)
+
+- 起動時: レシーバーの 1.0 コマンド (`[10, ff, 81, …]` ペアリング情報 / `[10, ff, 80, 02]`) →
+  **レシーバー long レジスタ 0x2B5 (serial/max devices)** を読む (G Hub は読めるが我々の同じ要求は
+  0x01 エラー。直前の `[10, ff, 80, 02]` がアンロックに関係する可能性、未検証)。
+- マウスに対しては **全 feature 呼び出しの間に Root.Ping を挟む** (payload `[04, 02, checksum]`)。
+  ただし ping が無くても GetDpiList / FriendlyName などは応答する (ping 必須では無さそう)。
+- オンボードプロファイルの全ページを読んでから DPI / RGB / 電池を読む。
+- 入力レポートは **1 リーダーが消費する**ため、G Hub と自作ツールの同時使用は応答の奪い合いになる。
+
+### 6.5 未実装 (将来の G Hub 完全置換に必要)
+
+- ボタン割り当て / DPI ステージ / ポーリングレート / RGB — すべてオンボードプロファイル (0x8100) の
+  書き込みが必要。ページ形式の解析 (page 0x01 = DPI u16LE 列、page 0x41 = RGB、page 0x80 = ボタン) は
+  スニッフィングで材料は揃っている。セクタへの書き込み + コミット手順が未解析。
+- ホスト DPI (0x2201) はオンボードモード ON でも即時効く (実測) — ステージ編集だけプロファイル経由。
+- POWERPLAY 充電パッド (同じレシーバー上の別論理デバイス) は未対応。

@@ -265,6 +265,38 @@ pub const KNOWN: &[KnownDevice] = &[
         driver: DriverKind::Lamzu,
         verified: false,
     },
+    // ---------------------------------------------------------------- マウス (Logicool HID++)
+    // Lightspeed レシーバー (POWERPLAY / G903 LIGHTSPEED, C53A) — 実機列挙 046D:C53A if2。
+    // 設定 = FF00:0001/0002 (HID++ short/long)。ペア機は driver が Root.Ping で確定する
+    // (G903 HERO は index 1。スリープ中は RESOURCE_ERROR)。
+    // 実機検証済: 検出・スリープ/復帰・名前 (0x0005)・電池 (0x1001)・DPI 読み書き (0x2201)。
+    KnownDevice {
+        vid: 0x046D,
+        pid: 0xC53A,
+        usage_page: Some(0xFF00),
+        usage: Some(0x0001),
+        kind: DeviceKind::Mouse,
+        vendor: "Logicool",
+        model: "logi-lightspeed-c53a",
+        name: "G903 LIGHTSPEED",
+        transport: Transport::Wireless24G,
+        driver: DriverKind::Logitech,
+        verified: true,
+    },
+    // Lightspeed レシーバー (C53D) — ペア先は ping で確定 (G613 等、1.0 のみの機種は未対応表示)。
+    KnownDevice {
+        vid: 0x046D,
+        pid: 0xC53D,
+        usage_page: Some(0xFF00),
+        usage: Some(0x0001),
+        kind: DeviceKind::Mouse,
+        vendor: "Logicool",
+        model: "logi-lightspeed-c53d",
+        name: "Lightspeed レシーバー",
+        transport: Transport::Wireless24G,
+        driver: DriverKind::Logitech,
+        verified: false,
+    },
 ];
 
 /// 列挙結果 (VID/PID/usage) に合う既知デバイス。`0xFFFF` のプレースホルダは一致しない。

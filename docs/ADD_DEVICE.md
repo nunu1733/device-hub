@@ -15,6 +15,8 @@
 | HTS Plus Pro (有線) | 33E4:5219 | FF02 / 02 | Mousefit → `mousefit8.rs` (report-8/EEPROM) | www.mouse.fit | **v2 実機検証済** (有線でも feature report は使えず report-8) |
 | HTX Ultra | 33E4:5608, 5617, 5618, 5619 | FF02 / 02 (推定) | Mousefit | www.mouse.fit | 機種表から登録 / 未検証 |
 | ATK F1 Ultimate | 未確定 | 未確定 | 未確定 | (mouse.fit の機種表に無い) | §7 を参照 |
+| G903 HERO (Lightspeed 無線) | レシーバー 046D:C53A | FF00 / 0001 | Logitech (`logitech.rs`, HID++ 2.0) | (Logicool G HUB の代替) | **実機検証済** (検出・スリープ/復帰・名前・電池 0x1001・DPI 読み書き 0x2201 — docs/PROTOCOL_NOTES §6) |
+| Lightspeed レシーバー (046D:C53D) | 046D:C53D | FF00 / 0001 | Logitech | — | 検出のみ (ペア先が 2.0 マウスなら同ドライバ)。G613 等 1.0 のみの機種は未対応表示 |
 
 **接続方式でプロトコルが変わる点に注意**: mouse.fit の新プロトコル (64B feature report) は
 有線機種専用 — 8K ドングルは Windows の feature report を一切持たず、ドングル経由は
