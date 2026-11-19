@@ -175,6 +175,8 @@ pub fn open(
         dpi_list: Mutex::new(Vec::new()),
         battery_cache: Mutex::new(None),
     };
+    // 「戻る」ボタンのゲーム内 Esc 置換フック (冪等・アプリ生存期間で 1 本)。
+    super::logi_remap::ensure_hook();
     d.detect();
     Ok(d)
 }
@@ -290,13 +292,11 @@ impl LogiDriver {
                 }
             }
             None => {
+                // 名前は書き換えない (registry の名前を残す。UI は asleep で状態を出す)。
                 *self.dev.lock().unwrap_or_else(|p| p.into_inner()) = asleep_idx;
                 *self.awake.lock().unwrap_or_else(|p| p.into_inner()) = false;
                 info.asleep = asleep_idx.is_some();
                 info.supported = asleep_idx.is_some();
-                if asleep_idx.is_none() {
-                    info.name = "Lightspeed レシーバー (ペア機なし)".into();
-                }
             }
         }
     }
@@ -437,26 +437,41 @@ impl LogiDriver {
             .ok_or(HubError::Disconnected)
     }
 
-    /// リンクが生きていることを ping で確認する。スリープから復帰していたら
-    /// 全体を再検出して Info + StateChanged を出す。
+    /// リンクが生きていることを確認する。見つかっていない / 寝ているときは
+    /// detect() で再検出し、復帰していれば Info + StateChanged を出す。
     fn ensure_awake(&self) -> HubResult<u8> {
-        let idx = self.dev_idx()?;
-        if *self.awake.lock().unwrap_or_else(|p| p.into_inner()) {
-            return Ok(idx);
+        let was_up = self.dev_idx().is_ok()
+            && *self.awake.lock().unwrap_or_else(|p| p.into_inner());
+        if was_up {
+            return self.dev_idx();
         }
-        if self.ping(idx) == Ping::Awake {
+        // 見つかっていない (dev None) / スリープ中 — ping が通るようなら全体を再検出。
+        let reachable = match self.dev_idx() {
+            Ok(idx) => self.ping(idx) == Ping::Awake,
+            Err(_) => false,
+        };
+        if reachable || self.dev_idx().is_err() {
             self.detect();
-            if !*self.awake.lock().unwrap_or_else(|p| p.into_inner()) {
+        } else if let Ok(idx) = self.dev_idx() {
+            // ペア機はいるが ping が通らない — ping が通った瞬間だけ再検出。
+            if self.ping(idx) != Ping::Awake {
                 return Err(HubError::Disconnected);
             }
-            let id = self.info.lock().unwrap_or_else(|p| p.into_inner()).id.clone();
+            self.detect();
+        }
+        if self.dev_idx().is_err()
+            || !*self.awake.lock().unwrap_or_else(|p| p.into_inner())
+        {
+            return Err(HubError::Disconnected);
+        }
+        let id = self.info.lock().unwrap_or_else(|p| p.into_inner()).id.clone();
+        if !was_up {
             if let Some(ev) = &self.events {
                 ev(HubEvent::Info(id.clone(), Box::new(self.info())));
                 ev(HubEvent::StateChanged(id));
             }
-            return Ok(idx);
         }
-        Err(HubError::Disconnected)
+        self.dev_idx()
     }
 
     /// バッテリー取得 (0x1004 → 0x1000 フォールバック)。
@@ -631,6 +646,22 @@ impl DeviceDriver for LogiDriver {
                 ));
             }
         }
+        // ゲーム中 戻るボタン → Esc (ホスト側リマップ)。マウス機能のある機種だけ出す。
+        if caps.mouse.is_some() {
+            caps.settings.push(
+                SettingSpec::toggle(
+                    "game_back_esc",
+                    section::CLICK,
+                    "「戻る」ボタンを Esc にする",
+                )
+                .help(concat!(
+                    "ON の間は「戻る」ボタンが Esc として送られます。",
+                    "通常は OFF にしておき、自動化 > プロセス連動でゲーム用プロファイル",
+                    "(この設定 ON) をゲームの exe に割り当てると、ゲーム中だけ Esc になります",
+                    " (旧 G Hub + AHK の F14 置換の代替)"
+                )),
+            );
+        }
         caps
     }
 
@@ -638,7 +669,13 @@ impl DeviceDriver for LogiDriver {
         let idx = self.ensure_awake()?;
         let mut settings = BTreeMap::new();
 
-        // ポーリングレート (0x8061 read fnid 0x10 → period ms)。
+        // ゲーム中 戻る → Esc (ホスト側リマップ。デバイス通信は不要だが read の流れで埋める)。
+        settings.insert(
+            "game_back_esc".into(),
+            SettingValue::Bool(super::logi_remap::get().game_back_esc),
+        );
+
+        // ポーリングレート (0x8061 func 1 → period ms)。
         if let Some(fi) = self.feat_idx(0x8061) {
             if let Ok(r) = self.cmd(idx, fi, 1, &[0]) {
                 if let Some(ms) = r.get(4).copied() {
@@ -703,6 +740,13 @@ impl DeviceDriver for LogiDriver {
     fn apply(&self, change: &Change) -> HubResult<()> {
         let idx = self.ensure_awake()?;
         match change {
+            Change::Setting { id, value } if id == "game_back_esc" => {
+                // ホスト側リマップ。デバイスへの書き込みは不要、フック設定だけ更新する。
+                let mut cfg = super::logi_remap::get();
+                cfg.game_back_esc = value.as_bool();
+                super::logi_remap::set(cfg);
+                Ok(())
+            }
             Change::Setting { id, value } if id == "polling_wireless" => {
                 let fi = self
                     .feat_idx(0x8061)

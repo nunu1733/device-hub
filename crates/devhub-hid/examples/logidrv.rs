@@ -69,6 +69,33 @@ fn main() {
                         println!("read: stages={:?} active={}", 
                             m.stages.iter().map(|s| s.x).collect::<Vec<_>>(), m.active_stage);
                     }
+                    // game_back_esc トグルの往復テスト (最後は OFF で残す)。
+                    if let Some(v) = st.settings.get("game_back_esc") {
+                        println!("game_back_esc (read): {:?}", v);
+                        for target in [true, false] {
+                            match drv.apply(&Change::Setting {
+                                id: "game_back_esc".into(),
+                                value: SettingValue::Bool(target),
+                            }) {
+                                Ok(()) => println!("apply game_back_esc={target}: ok"),
+                                Err(e) => println!("apply game_back_esc={target}: {e}"),
+                            }
+                            match drv.read() {
+                                Ok(st2) => println!(
+                                    "  -> read back: {:?}",
+                                    st2.settings.get("game_back_esc")
+                                ),
+                                Err(e) => println!("  -> read err: {e}"),
+                            }
+                        }
+                        println!(
+                            "  -> json: {:?}",
+                            std::path::Path::new(&std::env::var("APPDATA").unwrap())
+                                .join("DeviceHub").join("mouse_remap.json")
+                                .exists()
+                        );
+                    }
+
                     // DPI 書き込み往復テスト: 800 にして読み戻し、1600 に戻す。
                     if let Some(m) = &st.mouse {
                         let orig = m.stages.first().map(|s| s.x).unwrap_or(1600);

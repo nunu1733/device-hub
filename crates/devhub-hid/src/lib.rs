@@ -25,6 +25,9 @@ pub mod lamzu;
 /// Logicool HID++ ドライバ。診断 example (logi) からも使うので公開。
 #[doc(hidden)]
 pub mod logitech;
+/// 「戻る」ボタンのゲーム内 Esc 置換 (ホスト側 WH_MOUSE_LL リマップ)。
+#[doc(hidden)]
+pub mod logi_remap;
 #[allow(dead_code)]
 mod mousefit;
 mod mousefit8;
